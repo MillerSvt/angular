@@ -6,7 +6,8 @@
  * found in the LICENSE file at https://angular.dev/license
  */
 
-import {Injector, reflectComponentType, Type} from '@angular/core';
+import {ApplicationConfig, Injector, reflectComponentType, Type} from '@angular/core';
+import {createApplication} from '@angular/platform-browser';
 import {Subscription} from 'rxjs';
 
 import {ComponentNgElementStrategyFactory} from './component-factory-strategy';
@@ -65,11 +66,13 @@ export abstract class NgElement extends HTMLElement {
     newValue: string,
     namespace?: string,
   ): void;
+
   /**
    * Prototype for a handler that responds to the insertion of the custom element in the DOM.
    * @returns Nothing.
    */
   abstract connectedCallback(): void;
+
   /**
    * Prototype for a handler that responds to the deletion of the custom element from the DOM.
    * @returns Nothing.
@@ -95,17 +98,26 @@ export type WithProperties<P> = {
  *
  * @publicApi
  */
-export interface NgElementConfig {
-  /**
-   * The injector to use for retrieving the component's factory.
-   */
-  injector: Injector;
+export type NgElementConfig = {
   /**
    * An optional custom strategy factory to use instead of the default.
    * The strategy controls how the transformation is performed.
    */
   strategyFactory?: NgElementStrategyFactory;
-}
+} & (
+  | {
+      /**
+       * The injector to use for retrieving the component's factory.
+       */
+      injector: Injector;
+    }
+  | {
+      /**
+       * The config for application.
+       */
+      applicationConfig: ApplicationConfig;
+    }
+);
 
 /**
  *  @description Creates a custom element class based on an Angular component.
@@ -154,10 +166,20 @@ export function createCustomElement<P>(
     protected override get ngElementStrategy(): NgElementStrategy {
       // TODO(andrewseguin): Add e2e tests that cover cases where the constructor isn't called. For
       // now this is tested using a Google internal test suite.
+
       if (!this._ngElementStrategy) {
-        const strategy = (this._ngElementStrategy = strategyFactory.create(
-          this.injector || config.injector,
-        ));
+        const injector =
+          this.injector ??
+          ('injector' in config ? config.injector : null) ??
+          ('applicationConfig' in config
+            ? createApplication.sync(config.applicationConfig).injector
+            : null);
+
+        if (!injector) {
+          throw new Error('No injector provided.');
+        }
+
+        const strategy = (this._ngElementStrategy = strategyFactory.create(injector));
 
         // Re-apply pre-existing input values (set as properties on the element) through the
         // strategy.
