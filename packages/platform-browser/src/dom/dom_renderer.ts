@@ -13,8 +13,10 @@ import {
   Inject,
   Injectable,
   InjectionToken,
+  type ListenerOptions,
   NgZone,
   OnDestroy,
+  Optional,
   PLATFORM_ID,
   Renderer2,
   RendererFactory2,
@@ -22,16 +24,13 @@ import {
   RendererType2,
   ViewEncapsulation,
   ɵRuntimeError as RuntimeError,
-  type ListenerOptions,
   ɵTracingService as TracingService,
   ɵTracingSnapshot as TracingSnapshot,
-  Optional,
 } from '@angular/core';
 
 import {RuntimeErrorCode} from '../errors';
 
 import {EventManager} from './events/event_manager';
-import {createLinkElement, SharedStylesHost} from './shared_styles_host';
 
 export const NAMESPACE_URIS: {[ns: string]: string} = {
   'svg': 'http://www.w3.org/2000/svg',
@@ -128,6 +127,33 @@ export function addBaseHrefToCssSourceMap(baseHref: string, styles: string[]): s
   });
 }
 
+/**
+ * Creates a `link` element for the provided external style URL.
+ * @param url A string of the URL for the stylesheet.
+ * @param doc A DOM Document to use to create the element.
+ * @returns An HTMLLinkElement instance.
+ */
+export function createLinkElement(url: string, doc: Document): HTMLLinkElement {
+  const linkElement = doc.createElement('link');
+  linkElement.setAttribute('rel', 'stylesheet');
+  linkElement.setAttribute('href', url);
+
+  return linkElement;
+}
+
+/**
+ * Creates a `style` element with the provided inline style content.
+ * @param style A string of the inline style content.
+ * @param doc A DOM Document to use to create the element.
+ * @returns An HTMLStyleElement instance.
+ */
+export function createStyleElement(style: string, doc: Document): HTMLStyleElement {
+  const styleElement = doc.createElement('style');
+  styleElement.textContent = style;
+
+  return styleElement;
+}
+
 @Injectable()
 export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
   private readonly rendererByCompId = new Map<
@@ -139,7 +165,6 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
 
   constructor(
     private readonly eventManager: EventManager,
-    private readonly sharedStylesHost: SharedStylesHost,
     @Inject(APP_ID) private readonly appId: string,
     @Inject(REMOVE_STYLES_ON_COMPONENT_DESTROY) private removeStylesOnCompDestroy: boolean,
     @Inject(DOCUMENT) private readonly doc: Document,
@@ -170,16 +195,7 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
       type = {...type, encapsulation: ViewEncapsulation.Emulated};
     }
 
-    const renderer = this.getOrCreateRenderer(element, type);
-    // Renderers have different logic due to different encapsulation behaviours.
-    // Ex: for emulated, an attribute is added to the element.
-    if (renderer instanceof EmulatedEncapsulationDomRenderer2) {
-      renderer.applyToHost(element);
-    } else if (renderer instanceof NoneEncapsulationDomRenderer) {
-      renderer.applyStyles();
-    }
-
-    return renderer;
+    return this.getOrCreateRenderer(element, type);
   }
 
   private getOrCreateRenderer(element: any, type: RendererType2): Renderer2 {
@@ -190,7 +206,6 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
       const doc = this.doc;
       const ngZone = this.ngZone;
       const eventManager = this.eventManager;
-      const sharedStylesHost = this.sharedStylesHost;
       const removeStylesOnCompDestroy = this.removeStylesOnCompDestroy;
       const platformIsServer = this.platformIsServer;
       const tracingService = this.tracingService;
@@ -199,7 +214,6 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
         case ViewEncapsulation.Emulated:
           renderer = new EmulatedEncapsulationDomRenderer2(
             eventManager,
-            sharedStylesHost,
             type,
             this.appId,
             removeStylesOnCompDestroy,
@@ -212,7 +226,6 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
         case ViewEncapsulation.ShadowDom:
           return new ShadowDomRenderer(
             eventManager,
-            sharedStylesHost,
             element,
             type,
             doc,
@@ -224,7 +237,6 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
         default:
           renderer = new NoneEncapsulationDomRenderer(
             eventManager,
-            sharedStylesHost,
             type,
             removeStylesOnCompDestroy,
             doc,
@@ -237,6 +249,8 @@ export class DomRendererFactory2 implements RendererFactory2, OnDestroy {
 
       rendererByCompId.set(type.id, renderer);
     }
+
+    renderer.applyStyles(element);
 
     return renderer;
   }
@@ -265,13 +279,15 @@ class DefaultDomRenderer2 implements Renderer2 {
 
   constructor(
     private readonly eventManager: EventManager,
-    private readonly doc: Document,
+    protected readonly doc: Document,
     private readonly ngZone: NgZone,
     private readonly platformIsServer: boolean,
     private readonly tracingService: TracingService<TracingSnapshot> | null,
   ) {}
 
   destroy(): void {}
+
+  applyStyles(node: Node): void {}
 
   destroyNode = null;
 
@@ -471,6 +487,7 @@ class DefaultDomRenderer2 implements Renderer2 {
 }
 
 const AT_CHARCODE = (() => '@'.charCodeAt(0))();
+
 function checkNoSyntheticProp(name: string, nameKind: string) {
   if (name.charCodeAt(0) === AT_CHARCODE) {
     throw new RuntimeError(
@@ -491,7 +508,6 @@ class ShadowDomRenderer extends DefaultDomRenderer2 {
 
   constructor(
     eventManager: EventManager,
-    private sharedStylesHost: SharedStylesHost,
     private hostEl: any,
     component: RendererType2,
     doc: Document,
@@ -502,7 +518,6 @@ class ShadowDomRenderer extends DefaultDomRenderer2 {
   ) {
     super(eventManager, doc, ngZone, platformIsServer, tracingService);
     this.shadowRoot = (hostEl as any).attachShadow({mode: 'open'});
-    this.sharedStylesHost.addHost(this.shadowRoot);
     let styles = component.styles;
     if (ngDevMode) {
       // We only do this in development, as for production users should not add CSS sourcemaps to components.
@@ -548,28 +563,27 @@ class ShadowDomRenderer extends DefaultDomRenderer2 {
   override appendChild(parent: any, newChild: any): void {
     return super.appendChild(this.nodeOrShadowRoot(parent), newChild);
   }
+
   override insertBefore(parent: any, newChild: any, refChild: any): void {
     return super.insertBefore(this.nodeOrShadowRoot(parent), newChild, refChild);
   }
+
   override removeChild(_parent: any, oldChild: any): void {
     return super.removeChild(null, oldChild);
   }
+
   override parentNode(node: any): any {
     return this.nodeOrShadowRoot(super.parentNode(this.nodeOrShadowRoot(node)));
-  }
-
-  override destroy() {
-    this.sharedStylesHost.removeHost(this.shadowRoot);
   }
 }
 
 class NoneEncapsulationDomRenderer extends DefaultDomRenderer2 {
   private readonly styles: string[];
   private readonly styleUrls?: string[];
+  private styleElements: HTMLStyleElement[] = [];
 
   constructor(
     eventManager: EventManager,
-    private readonly sharedStylesHost: SharedStylesHost,
     component: RendererType2,
     private removeStylesOnCompDestroy: boolean,
     doc: Document,
@@ -590,8 +604,15 @@ class NoneEncapsulationDomRenderer extends DefaultDomRenderer2 {
     this.styleUrls = component.getExternalStyles?.(compId);
   }
 
-  applyStyles(): void {
-    this.sharedStylesHost.addStyles(this.styles, this.styleUrls);
+  override applyStyles(node: Node): void {
+    super.applyStyles(node);
+
+    const rootNode = this.getRootNode(node);
+
+    for (const styleElement of this.createStyleElements()) {
+      this.styleElements.push(styleElement);
+      rootNode.appendChild(styleElement);
+    }
   }
 
   override destroy(): void {
@@ -599,7 +620,31 @@ class NoneEncapsulationDomRenderer extends DefaultDomRenderer2 {
       return;
     }
 
-    this.sharedStylesHost.removeStyles(this.styles, this.styleUrls);
+    for (const styleElement of this.styleElements) {
+      styleElement.remove();
+    }
+
+    this.styleElements = [];
+  }
+
+  private *createStyleElements(): Generator<HTMLStyleElement> {
+    for (const style of this.styles) {
+      yield createStyleElement(style, this.doc);
+    }
+
+    for (const styleUrl of this.styleUrls ?? []) {
+      yield createLinkElement(styleUrl, this.doc);
+    }
+  }
+
+  private getRootNode(node: Node): Node {
+    node = node.getRootNode();
+
+    if (node === this.doc) {
+      return this.doc.head;
+    }
+
+    return node;
   }
 }
 
@@ -609,7 +654,6 @@ class EmulatedEncapsulationDomRenderer2 extends NoneEncapsulationDomRenderer {
 
   constructor(
     eventManager: EventManager,
-    sharedStylesHost: SharedStylesHost,
     component: RendererType2,
     appId: string,
     removeStylesOnCompDestroy: boolean,
@@ -621,7 +665,6 @@ class EmulatedEncapsulationDomRenderer2 extends NoneEncapsulationDomRenderer {
     const compId = appId + '-' + component.id;
     super(
       eventManager,
-      sharedStylesHost,
       component,
       removeStylesOnCompDestroy,
       doc,
@@ -634,9 +677,9 @@ class EmulatedEncapsulationDomRenderer2 extends NoneEncapsulationDomRenderer {
     this.hostAttr = shimHostAttribute(compId);
   }
 
-  applyToHost(element: any): void {
-    this.applyStyles();
-    this.setAttribute(element, this.hostAttr, '');
+  override applyStyles(node: Node): void {
+    super.applyStyles(node);
+    this.setAttribute(node, this.hostAttr, '');
   }
 
   override createElement(parent: any, name: string): Element {

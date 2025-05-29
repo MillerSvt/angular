@@ -6,18 +6,14 @@
  * found in the LICENSE file at https://angular.dev/license
  */
 
-import {
-  CommonModule,
-  DOCUMENT,
-  XhrFactory,
-  ɵPLATFORM_BROWSER_ID as PLATFORM_BROWSER_ID,
-} from '@angular/common';
+import {CommonModule, DOCUMENT, XhrFactory, ɵPLATFORM_BROWSER_ID as PLATFORM_BROWSER_ID} from '@angular/common';
 import {
   ApplicationConfig as ApplicationConfigFromCore,
   ApplicationModule,
   ApplicationRef,
   createPlatformFactory,
   ErrorHandler,
+  inject,
   InjectionToken,
   NgModule,
   NgZone,
@@ -37,7 +33,6 @@ import {
   ɵsetDocument,
   ɵTESTABILITY as TESTABILITY,
   ɵTESTABILITY_GETTER as TESTABILITY_GETTER,
-  inject,
 } from '@angular/core';
 
 import {BrowserDomAdapter} from './browser/browser_adapter';
@@ -47,7 +42,6 @@ import {DomRendererFactory2} from './dom/dom_renderer';
 import {DomEventsPlugin} from './dom/events/dom_events';
 import {EVENT_MANAGER_PLUGINS, EventManager} from './dom/events/event_manager';
 import {KeyEventsPlugin} from './dom/events/key_events';
-import {SharedStylesHost} from './dom/shared_styles_host';
 import {RuntimeErrorCode} from './errors';
 
 /**
@@ -236,7 +230,6 @@ const BROWSER_MODULE_PROVIDERS: Provider[] = [
   },
   {provide: EVENT_MANAGER_PLUGINS, useClass: KeyEventsPlugin, multi: true, deps: [DOCUMENT]},
   DomRendererFactory2,
-  SharedStylesHost,
   EventManager,
   {provide: RendererFactory2, useExisting: DomRendererFactory2},
   {provide: XhrFactory, useClass: BrowserXhr},
